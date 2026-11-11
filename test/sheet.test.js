@@ -54,3 +54,25 @@ test('history and life costs match the live app', { skip: !(have && fs.existsSyn
   console.log('  history', h.filter((m) => m.spent || m.income).map((m) => m.month.slice(0, 7) + ' ' + m.spent + '/' + m.income).join(', '),
     '| life costs', lc.total, '| unconfirmed', lc.categories.filter((c) => !c.confirmed).length);
 });
+
+/* The state the screens read, against the live app's readState for the same
+   export: everything but the sheet's row numbers and its own card name. */
+test('the screens get the same state as from the live app', { skip: !(have && fs.existsSync(ST)) && 'no export' }, async () => {
+  const { buildState, CARD_PAYMENT } = await import('../engine/state.js');
+  const fx = JSON.parse(fs.readFileSync(FX, 'utf8')), live = JSON.parse(fs.readFileSync(ST, 'utf8'));
+  const { data } = fromSheet(fx);
+  const s = buildState(data, fx.month, live.today);
+  for (const k of ['monthLabel', 'monthStartISO', 'toBeBudgeted', 'accountBalance', 'trueMonthlyTotal', 'lastMonthLabel', 'cardSetDate', 'accounts'])
+    assert.deepEqual(s[k], live[k], k);
+  const strip = (cs) => cs.filter((c) => c.name !== CARD_PAYMENT && !/credit card pay/i.test(c.name)).map((c) => ({ ...c, row: 0 }));
+  assert.deepEqual(s.groups.filter((g) => g.name !== 'Transfers').map((g) => [g.name, strip(g.categories)]),
+                   live.groups.map((g) => [g.name, strip(g.categories)]).filter(([, c]) => c.length || true), 'groups and categories');
+  assert.deepEqual(s.trackers.map(({ name, ...rest }) => rest), live.trackers.map(({ name, ...rest }) => rest), 'card figures');
+  assert.deepEqual(s.history, live.history, 'history');
+  assert.deepEqual(s.quick, live.quick, 'quick picks');
+  const row = (r) => [r.date, r.amount, r.income, r.category, r.paidTo, r.account, r.by, r.thisMonth];
+  assert.deepEqual(s.recent.map(row), live.recent.map(row), 'recent');
+  const tx = (r) => [r.iso, r.date, r.amount, r.income, r.category, r.paidTo, r.account, r.by];
+  assert.deepEqual(s.transactions.map(tx), live.transactions.map(tx), 'this and last month');
+  console.log('  state matches: groups', s.groups.length - 1, '| recent', s.recent.length, '| transactions', s.transactions.length, '| quick', s.quick.join(', '));
+});

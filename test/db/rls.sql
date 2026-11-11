@@ -75,3 +75,16 @@ select pg_temp.check(public.delete_my_data() = 1, 'Bea deletes her household');
 reset role;
 select pg_temp.check((select count(*) from public.households) = 1, 'only Avi''s household is left');
 select pg_temp.check((select count(*) from public.accounts where household_id = :'bea_h') = 0, 'Bea''s accounts went with it');
+
+-- no two categories with the same name in one household (any case), but two
+-- households may each have one
+select pg_temp.as_user(:'avi');
+do $$ begin
+  insert into public.categories (household_id, group_id, name)
+    select household_id, group_id, ' groceries ' from public.categories limit 1;
+  raise exception 'FAILED: duplicate category name';
+exception when unique_violation then raise notice 'ok  a category name is used once per household'; end $$;
+select public.create_household('Avi second home') as avi_h2 \gset
+insert into public.groups (household_id, name) values (:'avi_h2', 'Home') returning id as g2 \gset
+insert into public.categories (household_id, group_id, name) values (:'avi_h2', :'g2', 'Groceries');
+select pg_temp.check(true, 'another household can have its own Groceries');
