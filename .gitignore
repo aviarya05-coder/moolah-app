@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+.env
+.env.*
+# exports of a real household's sheet, used only for local checks; never committed
+test/fixtures/
