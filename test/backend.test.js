@@ -10,7 +10,7 @@ const household = () => ({
   categories: [{ id: 'food', groupId: 'g1', name: 'Groceries', sort: 1 }, { id: 'rent', groupId: 'g1', name: 'Rent', sort: 2, priority: 'fixed' }],
   assignments: [], transactions: [],
 });
-const make = (d = household()) => { const store = memoryStore(d); return { store, b: createBackend(store, { today: () => '2026-11-10', me: () => 'Avi' }) }; };
+const make = (d = household()) => { const store = memoryStore(d); return { store, b: createBackend(store, { today: () => '2026-11-10', me: () => 'Sam' }) }; };
 const cat = (s, n) => s.groups.flatMap((g) => g.categories).find((c) => c.name === n);
 
 test('income, assigning, a card purchase and paying the card', async () => {
@@ -28,7 +28,7 @@ test('income, assigning, a card purchase and paying the card', async () => {
   assert.equal(r.state.accountBalance, 9650);
   assert.equal(r.state.toBeBudgeted, 4000);
   assert.equal(r.state.recent[0].category, 'Credit card payment');
-  assert.equal(r.state.recent[0].by, 'Avi');
+  assert.equal(r.state.recent[0].by, 'Sam');
   // a card payment from the card itself makes no sense
   assert.ok(!(await b.addTransaction({ type: 'spend', amount: 5, category: 'Credit card payment', account: 'Credit Card' })).ok);
   assert.ok(!(await b.addTransaction({ type: 'spend', amount: 5, category: 'Nope' })).ok);
