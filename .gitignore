@@ -4,3 +4,4 @@ node_modules/
 .env.*
 # exports of a real household's sheet, used only for local checks; never committed
 test/fixtures/
+dist/
