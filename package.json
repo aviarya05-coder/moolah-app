@@ -5,6 +5,13 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "test:db": "test/db/run.sh"
+    "test:db": "test/db/run.sh",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173",
+    "test:e2e": "node test/e2e/first-run.cjs"
+  },
+  "devDependencies": {
+    "vite": "^8.3.8"
   }
 }

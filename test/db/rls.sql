@@ -78,6 +78,7 @@ select pg_temp.check((select count(*) from public.accounts where household_id = 
 
 -- no two categories with the same name in one household (any case), but two
 -- households may each have one
+set role authenticated;
 select pg_temp.as_user(:'avi');
 do $$ begin
   insert into public.categories (household_id, group_id, name)
@@ -88,3 +89,15 @@ select public.create_household('Avi second home') as avi_h2 \gset
 insert into public.groups (household_id, name) values (:'avi_h2', 'Home') returning id as g2 \gset
 insert into public.categories (household_id, group_id, name) values (:'avi_h2', :'g2', 'Groceries');
 select pg_temp.check(true, 'another household can have its own Groceries');
+
+-- a brand-new account, signed in for the first time, sees nothing at all
+-- until it creates its own household, and that household starts empty
+set role authenticated;
+select pg_temp.as_user('33333333-3333-3333-3333-333333333333');
+select pg_temp.check((select count(*) from public.households) = 0, 'a new account sees no household');
+select pg_temp.check((select count(*) from public.transactions) + (select count(*) from public.categories)
+  + (select count(*) from public.accounts) + (select count(*) from public.assignments) = 0, 'a new account sees no budget data');
+select public.create_household('Cara home') as cara_h \gset
+select pg_temp.check((select count(*) from public.households) = 1, 'a new account sees only the household it made');
+select pg_temp.check((select count(*) from public.transactions where household_id = :'cara_h') = 0
+  and (select count(*) from public.categories where household_id = :'cara_h') = 0, 'a new household starts empty');
