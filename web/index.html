@@ -221,10 +221,13 @@
   .txf .meta{text-align:center;font-size:12px;color:var(--mut);margin-bottom:18px}
   .txf label{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;
     color:var(--mut);font-weight:700;margin:12px 0 6px}
-  .txf input,.txf .catpick{width:100%;background:var(--tile);border:0;
+  .txf input,.txf .catpick,.txf select{width:100%;background:var(--tile);border:0;
     border-radius:16px;padding:13px 14px;font-size:15px;color:var(--ink);outline:none;
-    text-align:left;cursor:pointer}
-  .txf input:focus{box-shadow:inset 0 0 0 1.5px var(--accent)}
+    text-align:left;cursor:pointer;font-family:inherit}
+  .txf select{-webkit-appearance:none;appearance:none;padding-right:34px;
+    background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);
+    background-position:calc(100% - 19px) 50%,calc(100% - 14px) 50%;background-size:5px 5px;background-repeat:no-repeat}
+  .txf input:focus,.txf select:focus{box-shadow:inset 0 0 0 1.5px var(--accent)}
   .txf .row2{display:flex;gap:9px;margin-top:20px}
   .txf .row2 button{flex:1;border-radius:100px;padding:15px;font-size:14.5px;font-weight:700;cursor:pointer}
   .txf .save2{background:var(--grad);color:var(--onacc);border:0;
@@ -983,7 +986,7 @@
   .empty-msg{font-size:15px}
   .txf .big{font-size:40px;font-weight:700}
   .txf .meta{font-size:13px}
-  .txf input,.txf .catpick{font-size:16px;border-radius:12px}
+  .txf input,.txf .catpick,.txf select{font-size:16px;border-radius:12px}
   .txf .row2 button,.mvgo,.rcgo{font-size:17px;font-weight:600}
   .rcgo{background:var(--accentfill);color:var(--onacc);border-radius:100px}
   .mvamt{border-radius:12px}
@@ -1600,7 +1603,8 @@ function renderList(query){
     $('txSave').onclick = commitTx;
     $('txDel').onclick = removeTx;
     var cb = $('txCat');
-    if (cb) cb.onclick = function(){ sheetMode = 'cat'; $('sheetTitle').textContent = 'Reassign to';
+    $('txAcct').onchange = function(){ editingTx.account = this.value; };
+    if (cb) cb.onclick = function(){ stashTx(); sheetMode = 'cat'; $('sheetTitle').textContent = 'Reassign to';
       $('searchWrap').hidden = false; renderList(''); };
     return;
   }
@@ -1644,7 +1648,7 @@ function renderList(query){
 /* Opened from the Activity list. The record rides along for the header line. */
 function openTxRec(r){
   if (!r || !r.row) return;
-  editingTx = { rec: r, row: r.row, amount: r.amount, category: r.category, paidTo: r.paidTo || '' };
+  editingTx = { rec: r, row: r.row, amount: r.amount, category: r.category, paidTo: r.paidTo || '', account: r.account || '' };
   sheetMode = 'tx';
   $('sheetTitle').textContent = 'Transaction';
   $('searchWrap').hidden = true;
@@ -1652,8 +1656,30 @@ function openTxRec(r){
   $('scrim').classList.add('on'); $('sheet').classList.add('on');
 }
 
+/* Where a logged transaction can be moved: any account, except that income
+   and card payments go through the bank, never the card. If a change of
+   category rules out the account it is on, it moves to the first that fits
+   (shown before saving, never silently on save). */
+function txAccounts(){
+  var e = editingTx;
+  var cashOnly = e.rec.income || isCardPayCat(e.category);
+  var all = (S.accounts || []).slice().sort(function(a, b){ return (isCardAcct(b) ? 1 : 0) - (isCardAcct(a) ? 1 : 0); });
+  var list = cashOnly ? all.filter(function(a){ return !isCardAcct(a); }) : all;
+  if (e.account && list.indexOf(e.account) < 0 && !(cashOnly && isCardAcct(e.account))) list.push(e.account);
+  if (!list.length) list = [e.account || 'Checking account'];
+  if (list.indexOf(e.account) < 0) e.account = list[0];
+  return list;
+}
+/* What has been typed, kept while the category list is open. */
+function stashTx(){
+  if ($('txAmt')) editingTx.amount = parseFloat($('txAmt').value) || editingTx.amount;
+  if ($('txNote')) editingTx.paidTo = $('txNote').value;
+  if ($('txAcct')) editingTx.account = $('txAcct').value;
+}
+
 function renderTx(){
   var r = editingTx.rec;
+  var accts = txAccounts();
   return '<div class="txf">' +
     '<div class="big">' + (r.income ? '+' : '') + money0(editingTx.amount) + '</div>' +
     '<div class="meta">' + esc([r.date, r.account, r.by ? 'logged by ' + r.by : ''].filter(Boolean).join(' · ')) + '</div>' +
@@ -1662,6 +1688,9 @@ function renderTx(){
     (r.income ? '' :
       '<label>Category</label>' +
       '<button class="catpick" id="txCat">' + esc(editingTx.category || 'Choose') + '</button>') +
+    '<label for="txAcct">Account</label>' +
+    '<select id="txAcct">' + accts.map(function(a){
+      return '<option' + (a === editingTx.account ? ' selected' : '') + '>' + esc(a) + '</option>'; }).join('') + '</select>' +
     '<label>Note</label>' +
     '<input id="txNote" value="' + esc(editingTx.paidTo) + '">' +
     '<div class="row2">' +
@@ -1675,8 +1704,9 @@ function commitTx(){
   if (!amt) { toast('Enter an amount.', true); return; }
   editingTx.amount = amt;
   editingTx.paidTo = $('txNote').value;
+  editingTx.account = $('txAcct').value;
   var e = editingTx;
-  call('updateTransaction', [{ row: e.row, amount: e.amount, category: e.category, paidTo: e.paidTo }],
+  call('updateTransaction', [{ row: e.row, amount: e.amount, category: e.category, paidTo: e.paidTo, account: e.account }],
        function(res){
     if (!res || !res.ok){ toast((res && res.error) || 'Could not update.', true); return; }
     S = res.state; editingTx = null; closeSheet(); renderAll();
@@ -4167,8 +4197,9 @@ document.addEventListener('click', function(e){
   }
   var r = e.target.closest('[data-actrow]');
   if (r){
-    var row = Number(r.dataset.actrow);
-    openTxRec(actAll().filter(function(t){ return t.row === row; })[0]);
+    // compared as text: a sheet row is a number, a database id is not
+    var row = r.dataset.actrow;
+    openTxRec(actAll().filter(function(t){ return String(t.row) === row; })[0]);
   }
 });
 

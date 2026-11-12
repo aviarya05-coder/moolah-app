@@ -101,3 +101,37 @@ test('statement import: adds, a fix, and refusing a stale fix', async () => {
   r = await b.reconcileApply({ fixes: [{ row: r0.row, expect: { date: '2026-11-02', account: 'Checking account', out: 99, inn: 0 }, amount: 1 }] });
   assert.ok(!r.ok);
 });
+
+test('moving a logged transaction to another account', async () => {
+  const { b } = make();
+  await b.addTransaction({ type: 'income', amount: 5000, account: 'Checking account' });
+  await b.moveMany({ moves: [{ fromUnassigned: true, to: 'Groceries', amount: 1000 }] });
+  let r = await b.addTransaction({ type: 'spend', amount: 200, category: 'Groceries', account: 'Checking account', paidTo: 'Shop' });
+  assert.equal(r.state.accountBalance, 4800);
+  const row = r.row;
+  // logged on the bank by mistake: it was the card
+  r = await b.updateTransaction({ row, amount: 200, category: 'Groceries', paidTo: 'Shop', account: 'Credit Card' });
+  assert.equal(r.ok, true);
+  assert.equal(r.state.accountBalance, 5000, 'the bank gets the money back');
+  assert.equal(r.state.trackers[0].available, 200, 'the card now holds it for the bill');
+  assert.equal(cat(r.state, 'Groceries').available, 800, 'the category spent it either way');
+  assert.equal(r.state.recent[0].account, 'Credit Card');
+  // and back again
+  r = await b.updateTransaction({ row, amount: 200, category: 'Groceries', account: 'Checking account' });
+  assert.equal(r.state.accountBalance, 4800);
+  assert.equal(r.state.trackers[0].available, 0);
+  // income and card payments never go on the card; an unknown account is refused
+  const inc = (await b.addTransaction({ type: 'income', amount: 50, account: 'Checking account' })).row;
+  r = await b.updateTransaction({ row: inc, amount: 50, account: 'Credit Card' });
+  assert.equal(r.ok, false);
+  const pay = (await b.addTransaction({ type: 'spend', amount: 100, category: 'Credit card payment', account: 'Checking account' })).row;
+  r = await b.updateTransaction({ row: pay, amount: 100, category: 'Credit card payment', account: 'Credit Card' });
+  assert.equal(r.ok, false);
+  r = await b.updateTransaction({ row, amount: 200, category: 'Credit card payment', account: 'Credit Card' });
+  assert.equal(r.ok, false, 'nor can a purchase on the card become a card payment');
+  r = await b.updateTransaction({ row, amount: 200, category: 'Groceries', account: 'Savings' });
+  assert.equal(r.ok, false);
+  // leaving the account out changes nothing about it
+  r = await b.updateTransaction({ row, amount: 210, category: 'Groceries' });
+  assert.equal(r.state.recent.find((x) => x.row === row).account, 'Checking account');
+});
