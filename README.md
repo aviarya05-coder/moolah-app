@@ -31,8 +31,10 @@ This repository is the public app for iOS, Android and the web.
 ## Supabase
 
 1. SQL Editor: run each file in `supabase/migrations/`, in order.
-2. Authentication → Emails: put `{{ .Token }}` (the sign-in code) in the
-   Magic Link and Confirm signup templates. The app signs in by emailed code.
+2. Authentication → URL Configuration: the app's address as the Site URL
+   and in Redirect URLs, so the emailed sign-in link comes back to it. (Once
+   the project has its own email sender, the templates can carry a code as
+   well, `{{ .Token }}`; the app accepts either.)
 3. Edge Functions: deploy `supabase/functions/delete-account/index.ts` as
    `delete-account`, with Verify JWT off (it checks the sign-in itself).
 4. Put the project's publishable key in `web/config.js` (it is public by
@@ -40,6 +42,6 @@ This repository is the public app for iOS, Android and the web.
 
 ## Status
 
-Sign-in by emailed code, budgets kept in Supabase, and account deletion.
+Sign-in by emailed link (or code), budgets kept in Supabase, and account deletion.
 Next: generic statement import, categories editable in the app, then the iOS
 and Android builds with Google and Apple sign-in.

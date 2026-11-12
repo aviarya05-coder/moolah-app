@@ -152,6 +152,18 @@ async function supabase(route) {
   await pg.tap('#acctDel'); await pg.waitForSelector('#inEmail', { timeout: 8000 });
   ok(db.households.length === 0 && db.transactions.length === 0 && db.categories.length === 0, 'deleting the account deletes the budget');
   ok((await deviceKeys()).length === 0, 'and leaves nothing on the phone');
+
+  // signing in by the emailed link instead of a code
+  const cara = { id: uid(), email: 'cara@example.test' }; users.set(cara.email, cara);
+  await pg.goto('about:blank'); await pg.goto(APP + '#access_token=' + token(cara) + '&refresh_token=r-cara&expires_in=3600&expires_at=' + (Math.floor(Date.now() / 1000) + 3600) + '&token_type=bearer&type=magiclink');
+  await pg.waitForSelector('#suGo', { timeout: 8000 });
+  ok(!(await pg.evaluate(() => location.hash)), 'the emailed link signs a new person in, straight to an empty set-up, and the address is tidied');
+  await pg.tap('#tabbar [data-tab="more"]').catch(() => {});
+  await pg.evaluate(() => localStorage.clear());
+  await pg.goto('about:blank'); await pg.goto(APP + '#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired');
+  await pg.waitForSelector('#inEmail');
+  await pg.waitForFunction(() => document.getElementById('inErr').textContent.length > 0, null, { timeout: 5000 }).catch(() => {});
+  ok(/expired or was already used/.test(await pg.textContent('#inErr')), 'an old link says so: ' + await pg.textContent('#inErr'));
   ok(errs.length === 0, 'no page errors ' + JSON.stringify(errs));
   await b.close();
 })();

@@ -113,18 +113,23 @@ function startLocal() {
 async function startSignedIn() {
   const { createClient } = await import('@supabase/supabase-js');
   const client = createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+    // the emailed sign-in link comes back to the app with the session in
+    // the address; the client picks it up from there and tidies the address
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'implicit' },
   });
-  let user = null;
-  client.auth.onAuthStateChange((event) => {
+  let user = null, begin = null;
+  client.auth.onAuthStateChange((event, session) => {
     // signed out anywhere (here, or the session was revoked): leave nothing behind
     if (event === 'SIGNED_OUT' && user) { wipeDevice(); location.reload(); }
+    // signed in by the emailed link in another tab of this browser
+    if (event === 'SIGNED_IN' && session && !user && begin) setTimeout(() => begin(session), 0);
   });
 
-  const begin = async (session) => {
+  begin = async (session) => {
+    if (user && user.id === session.user.id) return;   // already under way
     user = session.user;
     const found = await client.from('households').select('id').limit(1);
-    if (found.error) return failedToLoad(found.error.message, () => begin(session));
+    if (found.error) return failedToLoad(found.error.message, () => { user = null; begin(session); });
     const go = (hid) => { use(supabaseStore(client, hid), user.id); addAccountRows(client, user); };
     if (found.data.length) return go(found.data[0].id);
     setup(async (d) => {
@@ -134,9 +139,15 @@ async function startSignedIn() {
     }, 'Your budget is kept in your account. Only you can see it.');
   };
 
+  const linkError = /error_description=([^&]+)/.exec(location.hash + '&' + location.search);
   const { data } = await client.auth.getSession();
   if (data.session) return begin(data.session);
   signIn(client, begin);
+  // a sign-in link that was used already, or is too old
+  if (linkError) {
+    history.replaceState(null, '', location.pathname);
+    $('inErr').textContent = 'That sign-in link has expired or was already used. Ask for a new one.';
+  }
 }
 
 function failedToLoad(msg, retry) {
@@ -151,30 +162,31 @@ function signIn(client, begin) {
     <div class="su">
       <div class="sumark">M</div>
       <h1>Moolah</h1>
-      <p class="sulead">Sign in, or make an account. We'll email you a code, so there's no password to remember.</p>
+      <p class="sulead">Sign in, or make an account. We'll email you a sign-in link, so there's no password to remember.</p>
       <label for="inEmail">Your email</label>
       <input id="inEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="200">
-      <button class="sugo" id="inSend">Email me a code</button>
+      <button class="sugo" id="inSend">Email me a sign-in link</button>
       <div id="inCodeBox" hidden>
-        <label for="inCode" id="inCodeLbl">The code from the email</label>
+        <p class="sulead" id="inSent"></p>
+        <label for="inCode">Or, if the email has a code, type it here</label>
         <input id="inCode" inputmode="numeric" autocomplete="one-time-code" maxlength="10">
         <button class="sugo" id="inGo">Sign in</button>
         <button class="sulink" id="inAgain">Use a different email</button>
       </div>
       <div class="suerr" id="inErr"></div>
-      <p class="sufine">New here? The same code makes your account. Your budget starts empty and only you can see it.</p>
+      <p class="sufine">New here? The same email makes your account. Your budget starts empty and only you can see it.</p>
     </div>`);
   const err = (m) => { $('inErr').textContent = m || ''; };
   const email = () => $('inEmail').value.trim().toLowerCase();
   $('inSend').onclick = async () => {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email())) return err('Enter your email address.');
     $('inSend').disabled = true; err('');
-    const r = await client.auth.signInWithOtp({ email: email(), options: { shouldCreateUser: true } });
+    const r = await client.auth.signInWithOtp({ email: email(),
+      options: { shouldCreateUser: true, emailRedirectTo: location.origin + location.pathname } });
     $('inSend').disabled = false;
     if (r.error) return err(/rate|seconds/i.test(r.error.message) ? 'Too many codes asked for. Wait a minute and try again.' : r.error.message);
     $('inEmail').disabled = true; $('inSend').hidden = true; $('inCodeBox').hidden = false;
-    $('inCodeLbl').textContent = 'The code we sent to ' + email();
-    $('inCode').focus();
+    $('inSent').textContent = 'We sent an email to ' + email() + '. Open it on this phone and tap the link to sign in.';
   };
   $('inGo').onclick = async () => {
     const code = $('inCode').value.replace(/\D/g, '');
