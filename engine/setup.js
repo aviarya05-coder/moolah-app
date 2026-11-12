@@ -57,10 +57,10 @@ export function newHousehold(choices) {
   // what is owed on the card is held for it, so it is not double-spent
   const transactions = [], assignments = [];
   const bal = cents(choices.cash && choices.cash.balance);
-  if (bal) transactions.push({ date, accountId: 'acct-cash', payee: 'Starting balance', categoryId: null, payCardId: null,
+  if (bal) transactions.push({ id: 'txn-start', date, accountId: 'acct-cash', payee: 'Starting balance', categoryId: null, payCardId: null,
     outflow: bal < 0 ? -bal : 0, inflow: bal > 0 ? bal : 0, seq: 1 });
   const owed = cents(choices.card && choices.card.owed);
-  if (cardName && owed > 0) assignments.push({ month: date.slice(0, 7) + '-01', cardId: 'acct-card', amount: owed, note: 'card balance set ' + date });
+  if (cardName && owed > 0) assignments.push({ id: 'asg-start', month: date.slice(0, 7) + '-01', cardId: 'acct-card', amount: owed, note: 'card balance set ' + date });
 
   return { household: { name, currency }, accounts, groups, categories, assignments, transactions };
 }

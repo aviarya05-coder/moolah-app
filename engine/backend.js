@@ -100,6 +100,18 @@ export function createBackend(store, opts = {}) {
           else { const c = category(p.category); if (!c) return { ok: false, error: 'Pick a category.' }; patch.categoryId = c.id; patch.payCardId = null; }
         }
       }
+      // moved to another account: income and card payments go through the
+      // bank, never onto a card (the same rule as logging them)
+      if (p.account !== undefined && p.account !== null && String(p.account).trim() !== '') {
+        const a = account(p.account);
+        if (!a) return { ok: false, error: 'Pick an account.' };
+        if (a.id !== t.accountId) patch.accountId = a.id;
+      }
+      const acct = data.accounts.find((a) => a.id === (patch.accountId || t.accountId));
+      const paysCard = patch.payCardId !== undefined ? !!patch.payCardId : !!t.payCardId;
+      if (acct && acct.kind === 'credit' && (income || paysCard)) {
+        return { ok: false, error: income ? 'Income goes into a bank account, not the card.' : 'A card payment comes from a bank account, not the card.' };
+      }
       await store.update('transactions', t.id, patch);
       return done();
     },
