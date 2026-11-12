@@ -11,11 +11,16 @@ This repository is the public app for iOS, Android and the web.
   figure for a month, `ops.js` builds the changes the screens make,
   `state.js` shapes it all for the screens, `backend.js` answers the
   screens' actions over a store, and `setup.js` makes a new, empty household.
+  `supabase-store.js` is the store over Supabase.
 - `web/` — the app: `index.html` holds the screens (ported from the personal
-  Moolah by `tools/port_screens.py`), `app.js` the start-up and first-run set-up.
+  Moolah by `tools/port_screens.py`), `app.js` sign-in, start-up and the
+  first-run set-up, `config.js` which Supabase project it uses.
 - `supabase/migrations/` — the database, with row-level security.
-- `test/` — `npm test` (engine), `npm run test:db` (database rules, on a
-  local Postgres), `npm run test:e2e` (the app in a phone-sized browser).
+  `supabase/functions/delete-account/` deletes an account from inside the app.
+- `test/` — `npm test` (engine and store), `npm run test:db` (database rules,
+  on a local Postgres), and two runs in a phone-sized browser: the first run
+  on the device (`build:e2e-local`, `test:e2e:local`) and signing in against
+  a stand-in for Supabase (`build:e2e-signin`, `test:e2e:sign-in`).
 
 ## Running it
 
@@ -23,7 +28,20 @@ This repository is the public app for iOS, Android and the web.
     npm run dev          # http://localhost:5173
     npm run build        # the site, in dist/
 
+## Supabase
+
+1. SQL Editor: run each file in `supabase/migrations/`, in order.
+2. Authentication → URL Configuration: the app's address as the Site URL
+   and in Redirect URLs, so the emailed sign-in link comes back to it. (Once
+   the project has its own email sender, the templates can carry a code as
+   well, `{{ .Token }}`; the app accepts either.)
+3. Edge Functions: deploy `supabase/functions/delete-account/index.ts` as
+   `delete-account`, with Verify JWT off (it checks the sign-in itself).
+4. Put the project's publishable key in `web/config.js` (it is public by
+   design; never the secret key).
+
 ## Status
 
-The screens run on the engine with a first-run set-up; budgets are kept on
-the device for now. Next: sign-in and Supabase, then the iOS and Android builds.
+Sign-in by emailed link (or code), budgets kept in Supabase, and account deletion.
+Next: generic statement import, categories editable in the app, then the iOS
+and Android builds with Google and Apple sign-in.

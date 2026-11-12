@@ -1,7 +1,7 @@
 /* First run in a phone-sized browser: set-up, the starting figures, assigning,
    a card purchase from the Log screen, surviving a reload, the other screens,
    and another browser starting empty. Needs Playwright and `npm run preview`.
-   Run: npm run build && npm run preview & npm run test:e2e */
+   Run: npm run build:e2e-local && npm run preview &   then   npm run test:e2e:local */
 const { chromium, devices } = require(process.env.PLAYWRIGHT || 'playwright');
 const URL = process.env.APP_URL || 'http://localhost:4173/';
 (async () => {
