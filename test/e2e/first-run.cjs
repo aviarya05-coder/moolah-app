@@ -35,6 +35,14 @@ const URL = process.env.APP_URL || 'http://localhost:4173/';
   for (const t of ['import', 'more', 'log', 'map']) { await pg.tap(`#tabbar [data-tab="${t}"]`); await pg.waitForTimeout(250); }
   await pg.tap('#tabbar [data-tab="more"]'); await pg.tap('#morescreen [data-tab="activity"]'); await pg.waitForTimeout(300);
   console.log('5 activity rows:', await pg.$$eval('#actBody .rec', x => x.length));
+  // the card purchase was really on the bank: move it from the Activity list
+  console.log('  every row can be opened:', await pg.$$eval('#actBody .rec', (x) => x.every((e) => e.dataset.actrow)));
+  await pg.locator('#actBody [data-actrow]', { hasText: 'Groceries' }).first().tap(); await pg.waitForSelector('#txAcct');
+  console.log('  edit sheet accounts:', JSON.stringify(await pg.$$eval('#txAcct option', (o) => o.map((x) => x.textContent))), '| on', await pg.inputValue('#txAcct'));
+  await pg.screenshot({ path: '/tmp/moolah-edit.png' });
+  await pg.selectOption('#txAcct', 'Checking account'); await pg.tap('#txSave'); await pg.waitForTimeout(400);
+  console.log('  moved to the bank: balance/card/groceries', JSON.stringify(await pg.evaluate(() => [S.accountBalance, S.trackers[0].available,
+    S.groups.flatMap(x => x.categories).find(x => x.name === 'Groceries').available, S.recent[0].account])), '| toast', await pg.textContent('#toast'));
   await pg.tap('#tabbar [data-tab="more"]'); await pg.tap('#moreLife'); await pg.waitForTimeout(300);
   console.log('  life costs head:', (await pg.innerText('.thead')).replace(/\n/g, ' / ').slice(0, 90));
   console.log('  errors', JSON.stringify(errs));
