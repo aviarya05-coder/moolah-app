@@ -18,7 +18,7 @@ insert into public.accounts (household_id, name, kind) values (:'ana_h', 'Checki
 insert into public.groups (household_id, name) values (:'ana_h', 'Home') returning id as ana_grp \gset
 insert into public.categories (household_id, group_id, name) values (:'ana_h', :'ana_grp', 'Groceries') returning id as ana_cat \gset
 insert into public.transactions (household_id, date, account_id, category_id, outflow) values (:'ana_h', '2026-11-03', :'ana_acct', :'ana_cat', 120);
-select set_config('my.ana_h', :'ana_h', false), set_config('my.ana_cat', :'ana_cat', false) \gset x_
+select set_config('my.ana_h', :'ana_h', false), set_config('my.ana_cat', :'ana_cat', false), set_config('my.ana_grp', :'ana_grp', false) \gset x_
 
 select pg_temp.as_user(:'bea');
 select public.create_household('Bea home', 'USD', 'en-US') as bea_h \gset
@@ -101,3 +101,38 @@ select public.create_household('Cara home') as cara_h \gset
 select pg_temp.check((select count(*) from public.households) = 1, 'a new account sees only the household it made');
 select pg_temp.check((select count(*) from public.transactions where household_id = :'cara_h') = 0
   and (select count(*) from public.categories where household_id = :'cara_h') = 0, 'a new household starts empty');
+
+-- starting a budget in one go: everything lands in the new household, a
+-- second start is refused, and no row can point into someone else's
+set role authenticated;
+select pg_temp.as_user('44444444-4444-4444-4444-444444444444');
+select public.start_household('{"household":{"name":"Dee home","currency":"USD"},
+  "accounts":[{"id":"a0000000-0000-4000-8000-000000000001","name":"Bank","kind":"cash","sort":1},
+              {"id":"a0000000-0000-4000-8000-000000000002","name":"Card","kind":"credit","sort":2}],
+  "groups":[{"id":"b0000000-0000-4000-8000-000000000001","name":"Food","sort":1}],
+  "categories":[{"id":"c0000000-0000-4000-8000-000000000001","groupId":"b0000000-0000-4000-8000-000000000001","name":"Groceries","sort":1,"priority":"normal","monthlyCost":null}],
+  "assignments":[{"month":"2026-11-01","cardId":"a0000000-0000-4000-8000-000000000002","amount":1500,"note":"card balance set 2026-11-11"}],
+  "transactions":[{"date":"2026-11-11","accountId":"a0000000-0000-4000-8000-000000000001","payee":"Starting balance","inflow":12000,"outflow":0,"seq":1}]}'::jsonb) as dee_h \gset
+select pg_temp.check((select count(*) from public.households) = 1 and (select currency from public.households) = 'USD', 'a started budget is the only household its owner sees');
+select pg_temp.check((select count(*) from public.accounts where household_id = :'dee_h') = 2
+  and (select count(*) from public.categories where household_id = :'dee_h') = 1
+  and (select sum(amount) from public.assignments where household_id = :'dee_h') = 1500
+  and (select sum(inflow) from public.transactions where household_id = :'dee_h') = 12000, 'a started budget holds just what set-up chose');
+select pg_temp.check((select role from public.members where household_id = :'dee_h') = 'owner', 'whoever starts a budget owns it');
+select pg_temp.check((select seq from public.transactions where household_id = :'dee_h') is not null, 'entries are numbered in the order they were made');
+do $$ begin
+  perform public.start_household('{"household":{"name":"Again"}}'::jsonb);
+  raise exception 'FAILED: a second budget was started';
+exception when raise_exception then
+  if sqlerrm like 'FAILED%' then raise; end if;
+  raise notice 'ok  a second start is refused';
+end $$;
+
+select pg_temp.as_user('55555555-5555-5555-5555-555555555555');
+do $$ begin
+  perform public.start_household(jsonb_build_object('household', '{"name":"Eve home"}'::jsonb,
+    'groups', '[{"id":"e0000000-0000-4000-8000-000000000001","name":"G"}]'::jsonb,
+    'categories', jsonb_build_array(jsonb_build_object('id', 'e0000000-0000-4000-8000-000000000002', 'groupId', current_setting('my.ana_grp', true), 'name', 'X'))));
+  raise exception 'FAILED: a new budget pointed at another household''s group';
+exception when foreign_key_violation then raise notice 'ok  a new budget cannot point at another household''s rows'; end $$;
+select pg_temp.check((select count(*) from public.households) = 0, 'a refused start leaves nothing behind');

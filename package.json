@@ -9,9 +9,15 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4173",
-    "test:e2e": "node test/e2e/first-run.cjs"
+    "build:e2e-local": "VITE_MOOLAH_LOCAL=1 vite build",
+    "build:e2e-signin": "VITE_SUPABASE_URL=https://mock.supabase.test VITE_SUPABASE_KEY=sb_publishable_test vite build",
+    "test:e2e:local": "node test/e2e/first-run.cjs",
+    "test:e2e:sign-in": "node test/e2e/sign-in.cjs"
   },
   "devDependencies": {
     "vite": "^8.3.8"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.118.0"
   }
 }
