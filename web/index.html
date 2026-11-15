@@ -813,8 +813,11 @@
     font-weight:700;padding:14px 2px 7px}
   .mvsec.bad{color:var(--dang)}
   .mvsec:first-child{padding-top:2px}
-  .mvsrc .v{color:var(--accent);font-family:inherit;font-size:12.5px}
-  .mvsrc.open{box-shadow:inset 0 0 0 1.5px var(--line2)}
+  /* a quiet line under From: how to cover only part of a shortfall */
+  .mvhint{font-size:11.5px;color:var(--mut);line-height:1.45;padding:8px 2px 0}
+  /* above the button: what moves, and what stays overspent */
+  .mvbal{font-size:12px;color:var(--mut);line-height:1.4;text-align:center;padding:2px 4px 0}
+  .mvbal:empty{display:none}
   .mvpick{min-height:52px}
   .mvpick .sm2.bad{color:var(--dang)}
   .opt2.sel .sm2,.opt2.sel .sm2.bad{color:var(--onacc2)}
@@ -4225,13 +4228,17 @@ $('actQ').addEventListener('keydown', function(e){ if (e.key === 'Enter') this.b
      - the Log screen, when a purchase is more than its category has left
    Handing out unassigned money is done in the Map's list itself (Assign),
    not here.
-   It is always one source and any number of destinations. The source is
-   unassigned money when there is any, and otherwise the category with the
-   most to spare; either can be changed. Destinations still without an
-   amount are skipped rather than holding up the rest. One write to the
-   sheet (moveMany) and one Undo for the lot.                              */
+   Any number of sources and any number of destinations, each with its own
+   amount. The destinations say what is wanted; the sources fill it in the
+   order listed, each giving what it can. Unassigned comes first when there
+   is any, then the categories with the most to spare, and as many join as
+   it takes. Choosing a source by hand stops more joining on their own.
+   Covering only part of a shortfall is allowed: lower any amount and the
+   rest stays overspent, carrying into next month. With one destination it
+   simply takes whatever the sources give. One write to the sheet
+   (moveMany) and one Undo for the lot.                                   */
 
-var mv = null;       // { from, picks: [{ name, amount }], showFrom, showAdd }
+var mv = null;       // { srcs: [{ name, amount, auto }], picks: [{ name, amount }], showFrom, showAdd, dropped }
 var mvBusy = false;
 
 function r2(n){ return Math.round(n * 100) / 100; }
@@ -4239,10 +4246,14 @@ function shortOf(c){ return r2(-c.available); }
 
 /* Where money can come from: unassigned first, since taking it deprives
    nothing else, then categories with room, flexible before normal before
-   fixed, most spare first. Never a category that is receiving. */
+   fixed, most spare first. Never a category that is receiving, nor one
+   already giving. */
 function mvSources(){
   var rank = { flexible: 0, normal: 1, fixed: 2 }, skip = {};
-  (mv ? mv.picks : []).forEach(function(p){ skip[p.name] = true; });
+  if (mv){
+    mv.picks.forEach(function(p){ skip[p.name] = true; });
+    mv.srcs.forEach(function(s){ skip[s.name] = true; });
+  }
   var cats = leaves().filter(function(c){ return c.available > 0 && !skip[c.name]; })
     .sort(function(a, b){
       return ((rank[a.priority] === undefined ? 1 : rank[a.priority]) -
@@ -4260,13 +4271,71 @@ function mvWhat(ready){
   var cats = k + (k === 1 ? ' category' : ' categories');
   return back ? TBB + ' and ' + cats : cats;
 }
+/* Where it came from: "Eating out", "Unassigned and Eating out", or for
+   more than two, "3 places". */
+function mvWhence(giving){
+  if (giving.length === 1) return giving[0].name;
+  if (giving.length === 2) return giving[0].name + ' and ' + giving[1].name;
+  return giving.length + ' places';
+}
 
 function mvReady(){ return mv.picks.filter(function(p){ return p.amount > 0; }); }
+function mvGiving(){ return mv.srcs.filter(function(s){ return s.amount > 0; }); }
 function mvTotal(){ return r2(mvReady().reduce(function(t, p){ return t + p.amount; }, 0)); }
-function mvSrc(){ return mv.from ? srcByName(mv.from) : null; }
+function mvGiven(){ return r2(mvGiving().reduce(function(t, s){ return t + s.amount; }, 0)); }
+function mvHas(s){ var x = srcByName(s.name); return x ? r2(x.available) : 0; }
+
+/* The sources, filled to what the destinations want: each in turn gives
+   what it has until the total is met. While every source is the sheet's
+   own choice, more join (best first, never one taken out by hand) until
+   they can cover it, and any that end up giving nothing leave again. */
+function mvFill(){
+  var need = mvTotal();
+  var room = function(){ return r2(mv.srcs.reduce(function(t, s){ return t + Math.max(0, mvHas(s)); }, 0)); };
+  if (mv.srcs.every(function(s){ return s.auto; })){
+    var more = mvSources().filter(function(s){ return !mv.dropped[s.name]; });
+    while (room() < need - 0.004 && more.length) mv.srcs.push({ name: more.shift().name, amount: 0, auto: true });
+  }
+  var left = need;
+  mv.srcs.forEach(function(s){
+    var a = r2(Math.max(0, Math.min(mvHas(s), left)));
+    s.amount = a; left = r2(left - a);
+  });
+  var kept = mv.srcs.filter(function(s){ return !s.auto || s.amount > 0; });
+  mv.srcs = kept.length ? kept : mv.srcs.slice(0, 1);
+}
+
+/* What each destination actually gets: the sources' total, handed out in
+   the order the destinations are listed. Less than was asked means part of
+   a shortfall stays. */
+function mvAlloc(){
+  var left = mvGiven();
+  return mvReady().map(function(p){
+    var a = r2(Math.min(p.amount, left)); left = r2(left - a);
+    return { name: p.name, amount: a };
+  }).filter(function(x){ return x.amount > 0; });
+}
+
+/* The sheet's moves as pairs for moveMany: each destination takes from the
+   sources in order. */
+function mvPairs(){
+  var out = [], si = 0;
+  var srcs = mvGiving().map(function(s){ return { name: s.name, left: s.amount }; });
+  mvAlloc().forEach(function(d){
+    var need = d.amount;
+    while (need > 0.004 && si < srcs.length){
+      var s = srcs[si], a = r2(Math.min(need, s.left));
+      if (a > 0) out.push({ from: s.name, to: d.name, amount: a });
+      need = r2(need - a); s.left = r2(s.left - a);
+      if (s.left <= 0.004) si++;
+    }
+  });
+  return out;
+}
 
 /* `to` is a list of category names, or of { name, amount } where the amount
-   is already known (the Log screen knows exactly how much is missing). */
+   is already known (the Log screen knows exactly how much is missing).
+   `from` names a source to start with (Move money out). */
 function openMoveSheet(opts){
   opts = opts || {};
   var picks = (opts.to || []).map(function(t){
@@ -4277,10 +4346,11 @@ function openMoveSheet(opts){
             : (c.available < 0 ? shortOf(c) : 0);
     return { name: name, amount: amt };
   }).filter(Boolean);
-  mv = { from: null, picks: picks, showFrom: false, showAdd: !picks.length };
-  var srcs = mvSources();
-  mv.from = opts.from && srcs.some(function(s){ return s.name === opts.from; })
-    ? opts.from : (srcs[0] ? srcs[0].name : null);
+  mv = { srcs: [], picks: picks, showFrom: false, showAdd: !picks.length, dropped: {} };
+  if (opts.from && mvSources().some(function(s){ return s.name === opts.from; })){
+    mv.srcs.push({ name: opts.from, amount: 0, auto: false });
+  }
+  mvFill();
   $('mvTitle').textContent = 'Move money';
   renderMoveSheet();
   $('mvScrim').classList.add('on'); $('movesheet').classList.add('on');
@@ -4300,42 +4370,49 @@ function mvStatus(c){
     : '<span class="sm2">' + money0(c.available) + ' available</span>';
 }
 
+/* One row with an amount: a source (`f`) or a destination. */
+function mvRow(kind, name, amount, sub){
+  var a = kind === 'f' ? 'data-mvfamt' : 'data-mvamt', x = kind === 'f' ? 'data-mvfdrop' : 'data-mvdrop';
+  return '<div class="opt2 mvpick sel">' +
+    '<span class="n">' + esc(name) + sub + '</span>' +
+    '<span class="mvright"><span class="mvin"><span>' + cur() + '</span><input inputmode="decimal" ' +
+      a + '="' + esc(name) + '" value="' + (amount || '') + '" placeholder="0"></span>' +
+    '<button type="button" class="mvx" ' + x + '="' + esc(name) + '" aria-label="Remove">×</button>' +
+    '</span></div>';
+}
+
 function renderMoveSheet(){
   if (!mv) return;
-  var src = mvSrc(), html = '';
+  var html = '';
 
-  /* From: the one source, and what it has before and after. Tapping it
-     lists the alternatives in place. */
+  /* From: every source with what it gives, and what it has before and
+     after. More can be added from the list that opens in place. */
   html += '<div class="mvsec">From</div>';
-  if (src){
-    html += '<button type="button" class="opt2 mvsrc' + (mv.showFrom ? ' open' : '') + '" data-mvsrcs>' +
-      '<span class="n">' + esc(src.name) +
-        '<span class="sm2" id="mvAfter"></span></span>' +
-      '<span class="v">' + (mv.showFrom ? 'Done' : 'Change ›') + '</span></button>';
-  } else {
+  html += mv.srcs.map(function(s){
+    return mvRow('f', s.name, s.amount, '<span class="sm2" data-mvfst="' + esc(s.name) + '"></span>');
+  }).join('');
+  var others = mvSources();
+  if (!mv.srcs.length && !others.length){
     html += '<div class="empty-msg">Nothing has money to spare right now.</div>';
-  }
-  if (mv.showFrom){
-    html += mvSources().filter(function(s){ return !src || s.name !== src.name; }).map(function(s){
+  } else if (!mv.showFrom){
+    if (others.length) html += '<button type="button" class="mvadd" data-mvfadd>+ Take from another category</button>';
+  } else {
+    html += others.map(function(s){
       var tag = s.unassigned ? '<span class="sm2">nothing else goes without</span>'
         : (s.priority === 'fixed' ? '<span class="sm2">fixed</span>' : '');
-      return '<button type="button" class="opt2" data-mvsrc="' + esc(s.name) + '">' +
+      return '<button type="button" class="opt2" data-mvfpick="' + esc(s.name) + '">' +
         '<span class="n">' + esc(s.name) + tag + '</span>' +
         '<span class="v">' + money0(s.available) + '</span></button>';
     }).join('');
+  }
+  if (mv.picks.some(function(p){ var c = byName(p.name); return c && c.available < 0; })){
+    html += '<div class="mvhint">Can’t spare it all? Lower any amount: whatever isn’t covered stays overspent and carries into next month.</div>';
   }
 
   /* To: what is receiving, each with its amount. */
   html += '<div class="mvsec">To</div>';
   html += mv.picks.map(function(p){
-    var c = byName(p.name);
-    return '<div class="opt2 mvpick sel">' +
-      '<span class="n">' + esc(p.name) + (c ? mvStatus(c)
-        : (isTbb(p.name) ? '<span class="sm2">back to be assigned again</span>' : '')) + '</span>' +
-      '<span class="mvright"><span class="mvin"><span>' + cur() + '</span><input inputmode="decimal" ' +
-        'data-mvamt="' + esc(p.name) + '" value="' + (p.amount || '') + '" placeholder="0"></span>' +
-      '<button type="button" class="mvx" data-mvdrop="' + esc(p.name) + '" aria-label="Remove">×</button>' +
-      '</span></div>';
+    return mvRow('t', p.name, p.amount, '<span class="sm2" data-mvst="' + esc(p.name) + '"></span>');
   }).join('');
 
   if (!mv.showAdd){
@@ -4346,16 +4423,16 @@ function renderMoveSheet(){
        into next month, so it is almost always where money should go. */
     var taken = {};
     mv.picks.forEach(function(p){ taken[p.name] = true; });
-    if (src && !src.unassigned) taken[src.name] = true;
+    mv.srcs.forEach(function(s){ taken[s.name] = true; });
     var row = function(c){
       return '<button type="button" class="opt2 mvpick" data-mvpick="' + esc(c.name) + '">' +
         '<span class="n">' + esc(c.name) + mvStatus(c) + '</span><span class="v">+</span></button>';
     };
-    /* Unassigned heads the list when the money is coming out of a
-       category: sending it back, to be given out again, is the usual aim. */
-    if (src && !src.unassigned && !taken[TBB]){
+    /* Unassigned heads the list when the money is coming out of categories:
+       sending it back, to be given out again, is the usual aim. */
+    if (mv.srcs.length && !taken[TBB]){
       html += '<button type="button" class="opt2 mvpick" data-mvpick="' + esc(TBB) + '">' +
-        '<span class="n">' + esc(TBB) + '<span class="sm2">back to be assigned again \u00b7 ' +
+        '<span class="n">' + esc(TBB) + '<span class="sm2">back to be assigned again · ' +
         money0(tbbAvail()) + ' now</span></span><span class="v">+</span></button>';
     }
     var bad = leaves().filter(function(c){ return c.available < 0 && !taken[c.name]; })
@@ -4367,57 +4444,95 @@ function renderMoveSheet(){
     });
   }
 
-  html += '<div class="mvfoot"><button type="button" class="mvgo" id="mvGo" data-mvgo></button></div>';
+  html += '<div class="mvfoot"><div class="mvbal" id="mvBal"></div>' +
+    '<button type="button" class="mvgo" id="mvGo" data-mvgo></button></div>';
   $('mvBody').innerHTML = html;
   syncMoveSheet();
 }
 
-/* Only the source's after-figure and the button change while an amount is
-   typed, so the field keeps focus. */
+/* What the sheet would do, checked: the first thing that stops it, if any. */
+function mvProblem(){
+  if (!mv.srcs.length) return 'Nothing to move from';
+  if (!mv.picks.length) return 'Choose where it goes';
+  var over = mv.srcs.filter(function(s){ return s.amount > mvHas(s) + 0.004; })[0];
+  if (over) return over.name + ' only has ' + money0(mvHas(over));
+  var given = mvGiven(), need = mvTotal();
+  if (!need) return 'Enter an amount';
+  if (!given) return 'Choose how much to take';
+  if (given > need + 0.004) return 'That’s ' + money0(r2(given - need)) + ' more than it needs';
+  return '';
+}
+
+/* Only the figures and the button change while an amount is typed, so the
+   field keeps focus. */
 function syncMoveSheet(){
   var b = $('mvGo');
   if (!b || !mv) return;
-  var src = mvSrc(), total = mvTotal(), ready = mvReady(), k = ready.length;
-  var short = src ? r2(total - src.available) : 0;
-  var after = $('mvAfter');
-  if (after && src){
-    after.textContent = money0(src.available) + (total ? ' → ' + money0(r2(src.available - total)) : ' available');
-    after.className = 'sm2' + (short > 0.004 ? ' bad' : '');
+  var body = $('mvBody'), got = {};
+  mvAlloc().forEach(function(a){ got[a.name] = a.amount; });
+
+  mv.srcs.forEach(function(s){
+    var el = body.querySelector('[data-mvfst="' + CSS.escape(s.name) + '"]');
+    if (!el) return;
+    var has = mvHas(s);
+    el.textContent = money0(has) + (s.amount ? ' → ' + money0(r2(has - s.amount)) : ' available');
+    el.className = 'sm2' + (s.amount > has + 0.004 ? ' bad' : '');
+  });
+  mv.picks.forEach(function(p){
+    var el = body.querySelector('[data-mvst="' + CSS.escape(p.name) + '"]');
+    if (!el) return;
+    var c = byName(p.name), g = got[p.name] || 0;
+    if (!c){ el.textContent = isTbb(p.name) ? 'back to be assigned again' : ''; el.className = 'sm2'; return; }
+    var after = r2(c.available + g);
+    if (c.available < 0){
+      el.textContent = money0(-c.available) + ' short' +
+        (g ? ' → ' + (after >= -0.004 ? (after > 0.004 ? money0(after) + ' available' : 'covered') : money0(-after) + ' short') : '');
+      el.className = 'sm2' + (after < -0.004 ? ' bad' : '');
+    } else {
+      el.textContent = money0(c.available) + (g ? ' → ' + money0(after) : ' available');
+      el.className = 'sm2';
+    }
+  });
+
+  var problem = mvProblem(), given = mvGiven(), need = mvTotal(), bal = $('mvBal');
+  var stays = r2(mv.picks.reduce(function(t, p){
+    var c = byName(p.name);
+    return c && c.available < 0 ? t + Math.max(0, -(c.available + (got[p.name] || 0))) : t;
+  }, 0));
+  if (bal){
+    bal.textContent = problem ? ''
+      : (given < need - 0.004
+          ? 'Moves ' + money0(given) + ' of the ' + money0(need) + ' asked for' +
+            (stays > 0.004 ? '; ' + money0(stays) + ' stays overspent.' : '.')
+          : (stays > 0.004 ? money0(stays) + ' stays overspent and carries into next month.' : ''));
   }
-  b.disabled = !src || !k || short > 0.004 || mvBusy;
+  b.disabled = !!problem || mvBusy;
+  var alloc = mvAlloc();
   b.textContent = mvBusy ? 'Moving…'
-    : (!src ? 'Nothing to move from'
-    : (!mv.picks.length ? 'Choose where it goes'
-    : (!k ? 'Enter an amount'
-    : (short > 0.004 ? src.name + ' only has ' + money0(src.available)
-    : 'Move ' + money0(total) + (k === 1 ? ' to ' + ready[0].name : ' to ' + mvWhat(ready))))));
+    : (problem || ('Move ' + money0(given) + ' to ' + mvWhat(alloc)));
 }
 
 function commitMoveSheet(){
   if (mvBusy || !mv) return;
-  var src = mvSrc(), ready = mvReady(), total = mvTotal();
-  if (!src || !ready.length) return;
-  var gone = ready.filter(function(p){ return !isTbb(p.name) && !byName(p.name); })[0];
+  if (mvProblem()) { syncMoveSheet(); return; }
+  var gone = mv.picks.concat(mv.srcs).filter(function(p){ return !isTbb(p.name) && !byName(p.name); })[0];
   if (gone){ toast(gone.name + ' is no longer in the sheet.', true); renderMoveSheet(); return; }
-  if (total > src.available + 0.004){                // figures may have moved on
-    toast(src.name + ' only has ' + money0(src.available) + ' now.', true); renderMoveSheet(); return;
-  }
-  var un = !!src.unassigned;
-  var moves = ready.map(function(p){
-    var back = isTbb(p.name);
-    return { from: un ? '' : src.name, fromUnassigned: un,
-             to: back ? '' : p.name, toUnassigned: back, amount: p.amount };
+  var giving = mvGiving(), alloc = mvAlloc(), total = mvGiven();
+  var moves = mvPairs().map(function(m){
+    var fu = isTbb(m.from), tu = isTbb(m.to);
+    return { from: fu ? '' : m.from, fromUnassigned: fu, to: tu ? '' : m.to, toUnassigned: tu, amount: m.amount };
   });
-  var what = mvWhat(ready);
+  if (!moves.length) return;
+  var allUn = giving.every(function(s){ return isTbb(s.name); });
+  var msg = allUn ? 'Assigned ' + money0(total) + ' to ' + mvWhat(alloc)
+    : 'Moved ' + money0(total) + ' from ' + mvWhence(giving) + ' to ' + mvWhat(alloc);
   mvBusy = true; syncMoveSheet();
   call('moveMany', [{ moves: moves }], function(res){
     mvBusy = false;
     if (!res || !res.ok){ toast((res && res.error) || 'Nothing was moved.', true); syncMoveSheet(); return; }
     if (res.state) S = res.state;
     closeMove(); renderAll(); renderMap();
-    toast(un ? 'Assigned ' + money0(total) + ' to ' + what
-             : 'Moved ' + money0(total) + ' from ' + src.name + ' to ' + what,
-      false, false, function(){ undoMoves(moves); });
+    toast(msg, false, false, function(){ undoMoves(moves); });
   }, function(e){ mvBusy = false; toast(e, true); syncMoveSheet(); });
 }
 
@@ -4459,6 +4574,13 @@ function renderOverspent(bad){
   closeMove = function(){ orig.apply(null, arguments); mv = null; };
 })();
 
+/* Sources chosen by hand from here on: the ones already giving stay, in
+   their order, and no more join on their own. */
+function mvByHand(){
+  mv.srcs = mv.srcs.filter(function(s){ return !s.auto || s.amount > 0; });
+  mv.srcs.forEach(function(s){ s.auto = false; });
+}
+
 document.addEventListener('click', function(e){
   var t;
   if ((t = e.target.closest('[data-fix]'))){ openMoveSheet({ to: [t.dataset.fix] }); return; }
@@ -4471,18 +4593,26 @@ document.addEventListener('click', function(e){
   if ((t = e.target.closest('[data-move]'))){ openMoveSheet({ to: [t.dataset.move] }); return; }
 
   if (!mv || !$('movesheet').classList.contains('on')) return;
-  if (e.target.closest('[data-mvamt]')) return;          // typing an amount
-  if (e.target.closest('[data-mvsrcs]')){ mv.showFrom = !mv.showFrom; renderMoveSheet(); return; }
-  if ((t = e.target.closest('[data-mvsrc]'))){
-    mv.from = t.dataset.mvsrc; mv.showFrom = false;
-    if (isTbb(mv.from)) mv.picks = mv.picks.filter(function(p){ return !isTbb(p.name); });
-    renderMoveSheet(); return;
+  if (e.target.closest('[data-mvamt]') || e.target.closest('[data-mvfamt]')) return;   // typing an amount
+  if (e.target.closest('[data-mvfadd]')){ mv.showFrom = true; renderMoveSheet(); return; }
+  if ((t = e.target.closest('[data-mvfpick]'))){
+    mvByHand();
+    mv.srcs.push({ name: t.dataset.mvfpick, amount: 0, auto: false });
+    delete mv.dropped[t.dataset.mvfpick];
+    mv.showFrom = false;
+    mvFill(); renderMoveSheet(); return;
+  }
+  if ((t = e.target.closest('[data-mvfdrop]'))){
+    var f = t.dataset.mvfdrop;
+    mv.dropped[f] = true;
+    mv.srcs = mv.srcs.filter(function(s){ return s.name !== f; });
+    mvFill(); renderMoveSheet(); return;
   }
   if (e.target.closest('[data-mvadd]')){ mv.showAdd = true; renderMoveSheet(); return; }
   if ((t = e.target.closest('[data-mvdrop]'))){
     var n = t.dataset.mvdrop;
     mv.picks = mv.picks.filter(function(p){ return p.name !== n; });
-    renderMoveSheet(); return;
+    mvFill(); renderMoveSheet(); return;
   }
   if ((t = e.target.closest('[data-mvpick]'))){
     if (isTbb(t.dataset.mvpick)){
@@ -4495,20 +4625,51 @@ document.addEventListener('click', function(e){
     // An overspent category is offered its shortfall; anything else starts
     // empty and takes the cursor.
     mv.picks.push({ name: c.name, amount: c.available < 0 ? shortOf(c) : 0 });
-    if (mv.from === c.name){ var s = mvSources()[0]; mv.from = s ? s.name : null; }
     mv.showAdd = false;
-    renderMoveSheet();
+    mvFill(); renderMoveSheet();
     focusEmptyPick();
     return;
   }
   if (e.target.closest('[data-mvgo]')){ commitMoveSheet(); return; }
 });
 
+/* Typing an amount. A destination's amount refills the sources; a source's
+   amount is taken as given, and with a single destination that destination
+   takes exactly what the sources give (which is how part of a shortfall is
+   covered). When the list of sources changes the sheet is redrawn and the
+   cursor put back where it was. */
 $('mvBody').addEventListener('input', function(e){
-  var f = e.target.closest('[data-mvamt]');
-  if (!f || !mv) return;
-  f.value = f.value.replace(/[^\d.]/g, '');
-  mv.picks.forEach(function(p){ if (p.name === f.dataset.mvamt) p.amount = r2(parseFloat(f.value) || 0); });
+  if (!mv) return;
+  var f = e.target.closest('[data-mvamt]'), g = e.target.closest('[data-mvfamt]');
+  if (!f && !g) return;
+  var el = f || g;
+  el.value = el.value.replace(/[^\d.]/g, '');
+  var v = r2(parseFloat(el.value) || 0);
+  var before = mv.srcs.map(function(s){ return s.name; }).join('\u0001');
+  if (f){
+    mv.picks.forEach(function(p){ if (p.name === f.dataset.mvamt) p.amount = v; });
+    mvFill();
+  } else {
+    mv.srcs.forEach(function(s){ if (s.name === g.dataset.mvfamt){ s.amount = v; s.auto = false; } });
+    mvByHand();
+    if (mv.picks.length === 1){
+      mv.picks[0].amount = mvGiven();
+      var d = $('mvBody').querySelector('[data-mvamt]');
+      if (d) d.value = mv.picks[0].amount || '';
+    }
+  }
+  if (mv.srcs.map(function(s){ return s.name; }).join('\u0001') !== before){
+    var attr = f ? 'data-mvamt' : 'data-mvfamt', name = el.getAttribute(attr), pos = el.value.length;
+    renderMoveSheet();
+    var again = $('mvBody').querySelector('[' + attr + '="' + CSS.escape(name) + '"]');
+    if (again){ again.focus(); try { again.setSelectionRange(pos, pos); } catch (x) {} }
+    return;
+  }
+  // the other side's figures, without redrawing the field being typed in
+  mv.srcs.forEach(function(s){
+    var x = $('mvBody').querySelector('[data-mvfamt="' + CSS.escape(s.name) + '"]');
+    if (x && x !== el) x.value = s.amount || '';
+  });
   syncMoveSheet();
 });
 
